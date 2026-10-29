@@ -1,6 +1,9 @@
 venv/
 build/
+build_*/
 dist/
+dist_*/
 _test_appdata/
+_test_out.log
 __pycache__/
 *.pyc
