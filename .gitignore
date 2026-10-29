@@ -1,0 +1,6 @@
+venv/
+build/
+dist/
+_test_appdata/
+__pycache__/
+*.pyc
