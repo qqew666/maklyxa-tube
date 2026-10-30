@@ -2,7 +2,6 @@ import ctypes
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import threading
@@ -12,7 +11,7 @@ import traceback
 import webview
 
 APP_NAME = "MaklyxaTube"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 
 APP_DATA_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), APP_NAME)
 CONFIG_PATH = os.path.join(APP_DATA_DIR, "settings.json")
@@ -274,7 +273,7 @@ def on_loaded(window):
 
 
 def watchdog(state):
-    for _ in range(90):
+    for _ in range(25):
         time.sleep(1)
         if state.get("loaded"):
             return
@@ -282,20 +281,6 @@ def watchdog(state):
     message_box(
         "YouTube не загрузился.\nЗакрой окно и запусти MaklyxaTube ещё раз.\n\nЛог: "
         + LOG_PATH
-    )
-
-
-def network_hint():
-    for _ in range(3):
-        try:
-            socket.create_connection(("www.youtube.com", 443), timeout=4).close()
-            return
-        except OSError:
-            time.sleep(1.0)
-    log("no network to www.youtube.com")
-    message_box(
-        "Нет соединения с YouTube (DNS или сеть).\n"
-        "Проверь интернет или включи VPN — приложение будет переподключаться само."
     )
 
 
@@ -308,6 +293,91 @@ def restart_self():
     except Exception:
         log("restart failed:\n" + traceback.format_exc())
         return False
+
+
+SPLASH_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>MaklyxaTube</title>
+<style>
+  html,body{margin:0;height:100%;background:#0f0f0f;color:#f1f1f1;
+    font:14px 'Segoe UI',Roboto,Arial;display:flex;align-items:center;justify-content:center}
+  .b{display:flex;flex-direction:column;align-items:center;gap:16px;text-align:center;
+    padding:0 24px;max-width:470px}
+  .s{width:38px;height:38px;border-radius:50%;border:3px solid #2a2a2a;border-top-color:#ff0033;
+    animation:r .8s linear infinite}
+  @keyframes r{to{transform:rotate(360deg)}}
+  .t{color:#bdbdbd;letter-spacing:.02em}
+  .h{color:#7a7a7a;font-size:12px;line-height:1.55}
+  .c{display:none;flex-direction:column;gap:10px;border:1px solid #ff003355;border-radius:14px;
+    background:#141414;padding:26px 28px;box-shadow:0 20px 60px rgba(0,0,0,.8)}
+  .c h1{margin:0 0 4px;font-size:19px;color:#ff0033}
+  .c p{margin:0;color:#c9c9c9;line-height:1.55;text-align:center}
+  .c b{color:#fff}
+  .c button{margin-top:8px;padding:9px 20px;border-radius:9px;border:1px solid #ff0033;
+    background:#ff0033;color:#fff;font:600 13px 'Segoe UI',Roboto,Arial;cursor:pointer}
+  .c button:hover{background:#ff3355}
+  .st{color:#8a8a8a;font-size:12px}
+</style></head><body>
+<div class="b">
+  <div class="s" id="spin"></div>
+  <div class="t" id="cap">Загружаю YouTube…</div>
+  <div class="h" id="hint">Долго не отвечает? Проверь интернет или VPN. Если YouTube
+    заблокирован на уровне DNS — включи DNS-over-HTTPS или VPN,
+    приложение переподключится само.</div>
+  <div class="c" id="card">
+    <h1>YouTube не открывается</h1>
+    <p>Не удалось подключиться к <b>youtube.com</b>.</p>
+    <p>Чаще всего это блокировка DNS: домен не резолвится. Включи VPN или DNS-over-HTTPS
+      и нажми «Повторить».</p>
+    <button id="retry">Повторить</button>
+    <div class="st" id="st"></div>
+  </div>
+</div>
+<script>
+(function () {
+  var tries = 0;
+  var failed = false;
+  var next = 0;
+
+  function openYouTube() {
+    tries++;
+    try { location.replace("https://www.youtube.com/"); } catch (e) {}
+  }
+
+  function tick() {
+    if (!failed) return;
+    var left = Math.max(0, Math.ceil((next - Date.now()) / 1000));
+    document.getElementById("st").textContent =
+      "Попыток: " + tries + " · автоповтор через " + left + " с";
+    if (Date.now() >= next) {
+      next = Date.now() + 20000;
+      openYouTube();
+    }
+  }
+
+  function fail() {
+    if (failed) return;
+    failed = true;
+    next = Date.now() + 20000;
+    document.getElementById("spin").style.display = "none";
+    document.getElementById("cap").style.display = "none";
+    document.getElementById("hint").style.display = "none";
+    document.getElementById("card").style.display = "flex";
+    tick();
+  }
+
+  document.getElementById("retry").addEventListener("click", function () {
+    next = 0;
+    openYouTube();
+  });
+
+  setTimeout(openYouTube, 400);
+  setTimeout(openYouTube, 9000);
+  setTimeout(openYouTube, 18000);
+  setTimeout(fail, 26000);
+  setInterval(tick, 1000);
+})();
+</script>
+</body></html>"""
 
 
 def main():
@@ -332,11 +402,10 @@ def main():
     api = Api()
     state = {"loaded": False}
     threading.Thread(target=watchdog, args=(state,), daemon=True).start()
-    threading.Thread(target=network_hint, daemon=True).start()
 
     window = webview.create_window(
         "%s %s" % (APP_NAME, VERSION),
-        "https://www.youtube.com/",
+        html=SPLASH_HTML,
         js_api=api,
         width=1380,
         height=860,

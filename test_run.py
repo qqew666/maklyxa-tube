@@ -1,4 +1,3 @@
-import json
 import os
 import sys
 
@@ -14,6 +13,8 @@ import webview
 with open(app.resource_path("inject.js"), "r", encoding="utf-8") as f:
     app.INJECT_JS = f.read()
 
+TARGET = os.environ.get("MT_TARGET", "splash")
+
 
 class ProbeApi(app.Api):
     def report(self, payload):
@@ -27,6 +28,8 @@ class ProbeApi(app.Api):
         os._exit(1)
 
 
+REPORT_AT = int(os.environ.get("MT_REPORT_AT", "5000"))
+
 REPORT_JS = r"""
 function mtReport() {
   try {
@@ -34,32 +37,32 @@ function mtReport() {
     var before = bar ? bar.style.display : 'missing';
     document.dispatchEvent(new KeyboardEvent('keydown', {key:'F1', shiftKey:true, bubbles:true}));
     var after = bar ? bar.style.display : 'missing';
+    var off = document.getElementById('__mt_offline');
+    var card = document.getElementById('card');
     var payload = {
-      href: location.href.slice(0, 80),
-      bridge: typeof (window.pywebview && window.pywebview.api && window.pywebview.api.report),
-      title: document.title,
+      href: location.href.slice(0, 90),
+      proto: location.protocol,
       injected: !!window.__MT_INJECTED,
-      theme: !!document.getElementById('__mt_theme'),
+      splash: !!document.querySelector('.s'),
+      cardShown: card ? card.style.display : 'none',
+      cap: (document.getElementById('cap') || {}).textContent || '',
+      statusText: (document.getElementById('st') || {}).textContent || '',
+      text: (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 120),
+      offline: !!off,
+      offlineStatus: (document.getElementById('__mt_offline_status') || {}).textContent || '',
       bar: !!bar,
       before: before,
       after: after,
-      netTries: window.__MT_NET_TRIES,
-      dl: !!document.getElementById('__mt_dl'),
       dark: document.documentElement.getAttribute('dark'),
-      api: !!(window.pywebview && window.pywebview.api),
-      adCss: (function () {
-        var st = document.getElementById('__mt_theme');
-        return st ? st.textContent.indexOf('masthead-ad') !== -1 : false;
-      })()
+      api: !!(window.pywebview && window.pywebview.api)
     };
     window.pywebview.api.report(JSON.stringify(payload));
   } catch (e) {
     try { window.pywebview.api.fail(String(e)); } catch (e2) {}
   }
 }
-setTimeout(mtReport, 6000);
-setTimeout(mtReport, 15000);
-"""
+setTimeout(mtReport, __MT_REPORT_AT__);
+""".replace("__MT_REPORT_AT__", str(REPORT_AT))
 
 
 def on_loaded(window):
@@ -74,8 +77,22 @@ def on_loaded(window):
 
 
 api = ProbeApi()
-window = webview.create_window(
-    "MT-test", "https://www.youtube.com/", js_api=api, width=1200, height=800
-)
+if TARGET == "splash":
+    window = webview.create_window(
+        "MT-test", html=app.SPLASH_HTML, js_api=api, width=1200, height=800
+    )
+elif TARGET == "splash_local":
+    repl = os.environ.get("MT_REPLACE", "http://127.0.0.1:9/")
+    window = webview.create_window(
+        "MT-test",
+        html=app.SPLASH_HTML.replace("https://www.youtube.com/", repl),
+        js_api=api,
+        width=1200,
+        height=800,
+    )
+else:
+    window = webview.create_window(
+        "MT-test", TARGET, js_api=api, width=1200, height=800
+    )
 window.events.loaded += lambda: on_loaded(window)
 webview.start(private_mode=False, storage_path=app.WEBVIEW_DIR)

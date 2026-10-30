@@ -274,24 +274,87 @@
   }, 2000);
   mtBar();
 
-  // ---------- автопереподключение, если YouTube не открылся ----------
-  window.__MT_NET_TRIES = 0;
-  function netTick() {
-    var host = location.hostname;
-    if (host === "www.youtube.com" || host === "youtube.com" || host === "m.youtube.com") {
-      window.__MT_NET_TRIES = 0;
-      return;
+  // ---------- экран ошибки вместо чёрного окна ----------
+  function isYouTubeHost() {
+    var h = location.hostname || "";
+    return h === "youtube.com" || /(^|\.)youtube\.com$/.test(h);
+  }
+
+  var net = { tries: 0, next: 0 };
+
+  function goYouTube() {
+    try { location.replace("https://www.youtube.com/"); } catch (e) {}
+  }
+
+  function secondsLeft() {
+    return Math.max(1, Math.ceil((net.next - Date.now()) / 1000));
+  }
+
+  function renderOffline() {
+    var el = document.getElementById("__mt_offline");
+    if (!el) {
+      var st = document.createElement("style");
+      st.id = "__mt_offline_css";
+      st.textContent = [
+        "html,body{background:#0f0f0f!important;margin:0;height:100%!important}",
+        "#__mt_offline{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;",
+        "justify-content:center;background:#0f0f0f;font:14px 'Segoe UI',Roboto,Arial;color:#eee}",
+        "#__mt_offline .c{max-width:430px;padding:28px 30px;border:1px solid #ff003355;",
+        "border-radius:14px;background:#141414;box-shadow:0 20px 60px rgba(0,0,0,.8);text-align:center}",
+        "#__mt_offline h1{margin:0 0 12px;font-size:19px;color:#ff0033}",
+        "#__mt_offline p{margin:0 0 8px;line-height:1.55;color:#c9c9c9}",
+        "#__mt_offline b{color:#fff}",
+        "#__mt_offline button{margin-top:16px;padding:9px 20px;border-radius:9px;",
+        "border:1px solid #ff0033;background:#ff0033;color:#fff;font:600 13px 'Segoe UI',Roboto,Arial;",
+        "cursor:pointer}",
+        "#__mt_offline button:hover{background:#ff3355}",
+        "#__mt_offline .h{margin-top:12px;color:#8a8a8a;font-size:12px}"
+      ].join("");
+      if (document.head) document.head.appendChild(st);
+      else document.documentElement.appendChild(st);
+      el = document.createElement("div");
+      el.id = "__mt_offline";
+      el.innerHTML =
+        '<div class="c"><h1>YouTube не открывается</h1>' +
+        "<p>Не удалось подключиться к <b>youtube.com</b>.</p>" +
+        "<p>Чаще всего это блокировка DNS: домен не резолвится. Включи VPN " +
+        "или DNS-over-HTTPS и нажми «Повторить».</p>" +
+        '<button id="__mt_retry">Повторить</button>' +
+        '<div class="h" id="__mt_offline_status"></div></div>';
+      (document.body || document.documentElement).appendChild(el);
+      el.querySelector("#__mt_retry").addEventListener("click", function () {
+        net.tries = 0;
+        net.next = 0;
+        goYouTube();
+      });
     }
-    window.__MT_NET_TRIES++;
-    var tries = window.__MT_NET_TRIES;
-    if (tries === 3) {
-      mtToast("Нет связи с YouTube. Проверь интернет или VPN — переподключаюсь…");
-    }
-    if (tries === 1 || tries % 4 === 0) {
-      setTimeout(function () { try { location.reload(); } catch (e) {} }, 1500);
+    var s = document.getElementById("__mt_offline_status");
+    if (s) {
+      s.textContent = "Попыток: " + net.tries + " · автоповтор через " + secondsLeft() + " с";
     }
   }
-  setInterval(netTick, 4000);
+
+  function netTick() {
+    if (isYouTubeHost()) return;
+    var now = Date.now();
+    if (!net.next) {
+      net.next = now + 30000;
+      renderOffline();
+      return;
+    }
+    if (now >= net.next) {
+      net.tries++;
+      net.next = now + 30000;
+      goYouTube();
+      return;
+    }
+    renderOffline();
+  }
+
+  if (!/^(about|blob|file|data):/.test(location.protocol)) {
+    netTick();
+    setInterval(netTick, 1000);
+  }
 
   // применяем настройки из нативного приложения
   try {
