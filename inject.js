@@ -176,27 +176,34 @@
     }, 0);
   }
 
-  // плавающая кнопка MT + скачивание
-  function mtButton() {
-    if (document.getElementById("__mt_btn")) return;
-    var b = document.createElement("button");
-    b.id = "__mt_btn";
-    b.textContent = "MT";
-    b.title = "MaklyxaTube";
-    b.style.cssText =
-      "position:fixed;top:12px;right:16px;z-index:999997;width:38px;height:38px;" +
-      "border-radius:50%;border:1px solid #ff0033;background:#141414;color:#ff0033;" +
-      "font:700 13px Roboto,Arial;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.5);";
-    b.addEventListener("click", function (ev) { ev.stopPropagation(); mtPanel(); });
-    document.body.appendChild(b);
+  // панель кнопок, скрыта до Shift+F1
+  function mtBar() {
+    if (document.getElementById("__mt_bar")) return;
+    var bar = document.createElement("div");
+    bar.id = "__mt_bar";
+    bar.style.cssText =
+      "position:fixed;top:12px;right:16px;z-index:999997;display:none;" +
+      "gap:8px;align-items:center;";
 
-    var d = document.createElement("button");
-    d.id = "__mt_dl";
-    d.textContent = "⬇ Скачать";
-    d.style.cssText =
-      "position:fixed;top:58px;right:16px;z-index:999997;padding:6px 12px;" +
-      "border-radius:8px;border:1px solid #ff0033;background:#141414;color:#fff;" +
-      "font:12px Roboto,Arial;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.5);";
+    var btn = function (id, text) {
+      var b = document.createElement("button");
+      b.id = id;
+      b.textContent = text;
+      b.style.cssText =
+        "padding:7px 12px;border-radius:8px;border:1px solid #ff0033;background:#141414;" +
+        "color:#fff;font:600 12px Roboto,Arial;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.5);";
+      return b;
+    };
+
+    var mt = btn("__mt_btn", "MT");
+    mt.title = "Настройки MaklyxaTube";
+    mt.style.color = "#ff0033";
+    mt.style.fontWeight = "700";
+    mt.addEventListener("click", function (ev) { ev.stopPropagation(); mtPanel(); });
+    bar.appendChild(mt);
+
+    var d = btn("__mt_dl", "⬇ Скачать");
+    d.title = "Скачать это видео";
     d.addEventListener("click", function () {
       var url = location.href;
       if (url.indexOf("watch?v=") === -1 && url.indexOf("youtu.be/") === -1) {
@@ -212,8 +219,30 @@
         }
       });
     });
-    document.body.appendChild(d);
+    bar.appendChild(d);
+
+    document.body.appendChild(bar);
   }
+
+  function toggleBar() {
+    mtBar();
+    var bar = document.getElementById("__mt_bar");
+    if (!bar) return;
+    var show = bar.style.display === "none";
+    bar.style.display = show ? "flex" : "none";
+    if (!show) {
+      var p = document.getElementById("__mt_panel");
+      if (p) p.remove();
+    }
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.shiftKey && (e.key === "F1" || e.keyCode === 112)) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleBar();
+    }
+  }, true);
 
   // ---------- скачивание: статус получаем опросом из Python ----------
   window.__MT_DL_ACTIVE = false;
@@ -238,11 +267,31 @@
     }).catch(function () {});
   }, 700);
 
-  var uiTimer = setInterval(function () {
+  setInterval(function () {
     if (!document.body) return;
-    mtButton();
-  }, 1500);
-  mtButton();
+    mtBar();
+    applyTheme();
+  }, 2000);
+  mtBar();
+
+  // ---------- автопереподключение, если YouTube не открылся ----------
+  window.__MT_NET_TRIES = 0;
+  function netTick() {
+    var host = location.hostname;
+    if (host === "www.youtube.com" || host === "youtube.com" || host === "m.youtube.com") {
+      window.__MT_NET_TRIES = 0;
+      return;
+    }
+    window.__MT_NET_TRIES++;
+    var tries = window.__MT_NET_TRIES;
+    if (tries === 3) {
+      mtToast("Нет связи с YouTube. Проверь интернет или VPN — переподключаюсь…");
+    }
+    if (tries === 1 || tries % 4 === 0) {
+      setTimeout(function () { try { location.reload(); } catch (e) {} }, 1500);
+    }
+  }
+  setInterval(netTick, 4000);
 
   // применяем настройки из нативного приложения
   try {

@@ -3,7 +3,9 @@ import os
 import sys
 
 os.environ["APPDATA"] = os.path.join(os.path.dirname(__file__), "_test_appdata")
+os.environ["LOCALAPPDATA"] = os.path.join(os.path.dirname(__file__), "_test_localappdata")
 os.makedirs(os.environ["APPDATA"], exist_ok=True)
+os.makedirs(os.environ["LOCALAPPDATA"], exist_ok=True)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app
@@ -28,22 +30,27 @@ class ProbeApi(app.Api):
 REPORT_JS = r"""
 function mtReport() {
   try {
-    var v = document.querySelector('video');
+    var bar = document.getElementById('__mt_bar');
+    var before = bar ? bar.style.display : 'missing';
+    document.dispatchEvent(new KeyboardEvent('keydown', {key:'F1', shiftKey:true, bubbles:true}));
+    var after = bar ? bar.style.display : 'missing';
     var payload = {
       href: location.href.slice(0, 80),
       bridge: typeof (window.pywebview && window.pywebview.api && window.pywebview.api.report),
       title: document.title,
       injected: !!window.__MT_INJECTED,
       theme: !!document.getElementById('__mt_theme'),
-      btn: !!document.getElementById('__mt_btn'),
+      bar: !!bar,
+      before: before,
+      after: after,
+      netTries: window.__MT_NET_TRIES,
       dl: !!document.getElementById('__mt_dl'),
       dark: document.documentElement.getAttribute('dark'),
       api: !!(window.pywebview && window.pywebview.api),
       adCss: (function () {
         var st = document.getElementById('__mt_theme');
         return st ? st.textContent.indexOf('masthead-ad') !== -1 : false;
-      })(),
-      video: v ? { paused: v.paused, t: v.currentTime } : null
+      })()
     };
     window.pywebview.api.report(JSON.stringify(payload));
   } catch (e) {
@@ -71,4 +78,4 @@ window = webview.create_window(
     "MT-test", "https://www.youtube.com/", js_api=api, width=1200, height=800
 )
 window.events.loaded += lambda: on_loaded(window)
-webview.start(private_mode=False)
+webview.start(private_mode=False, storage_path=app.WEBVIEW_DIR)
