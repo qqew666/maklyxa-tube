@@ -20,6 +20,38 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Build MaklyxaTube
         run: cmd /c build.bat
+      - name: Start the Windows client
+        shell: pwsh
+        run: |
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'MaklyxaTube-Smoke-Roaming'
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'MaklyxaTube-Smoke-Local'
+          $log = Join-Path $env:APPDATA 'MaklyxaTube/app.log'
+          $exe = (Resolve-Path 'dist/MaklyxaTube.exe').Path
+          $first = Start-Process -FilePath $exe -PassThru
+          $second = $null
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(70)
+            do {
+              if ($first.HasExited) { throw 'MaklyxaTube exited at startup.' }
+              $content = if (Test-Path $log) { Get-Content $log -Raw }
+              if ($content -match 'YouTube navigation completed|YouTube connection failed') { break }
+              Start-Sleep -Milliseconds 500
+            } while ([DateTime]::UtcNow -lt $deadline)
+            if ($content -notmatch 'YouTube navigation completed|YouTube connection failed') {
+              throw 'MaklyxaTube did not report a WebView2 navigation.'
+            }
+            $second = Start-Process -FilePath $exe -PassThru
+            if (!$second.WaitForExit(8000) -or $second.ExitCode -ne 0 -or $first.HasExited) {
+              throw 'The second launch did not return to the running client.'
+            }
+            if (!$first.CloseMainWindow() -or !$first.WaitForExit(10000) -or $first.ExitCode -ne 0) {
+              throw 'MaklyxaTube could not close its window normally.'
+            }
+          } finally {
+            if (Test-Path $log) { Get-Content $log }
+            if ($second -and !$second.HasExited) { Stop-Process -Id $second.Id }
+            if (!$first.HasExited) { Stop-Process -Id $first.Id }
+          }
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: MaklyxaTube-Windows-x64
