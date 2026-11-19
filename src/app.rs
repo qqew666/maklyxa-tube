@@ -1,6 +1,8 @@
 use std::{
     env, fs, io,
     process::Command,
+    sync::mpsc::{self, RecvTimeoutError},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -38,6 +40,7 @@ const RESTARTED: &str = "MAKLYXA_RESTARTED";
 type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 enum AppEvent {
+    Timer,
     Starting {
         id: u64,
         url: String,
@@ -129,6 +132,7 @@ fn run_window(paths: &Paths) -> AppResult<()> {
         .with_visible(false)
         .build(&events)?;
 
+    paths.log("Windows window created");
     let mut context = WebContext::new(Some(paths.webview.clone()));
     let view = WebViewBuilder::new_with_web_context(&mut context)
         .with_background_color((15, 15, 15, 255))
@@ -137,9 +141,12 @@ fn run_window(paths: &Paths) -> AppResult<()> {
         )
         .with_initialization_script(INJECT)
         .build(&window)?;
-    attach_events(&view.webview(), &events.create_proxy())?;
+    paths.log("WebView2 created");
+    let proxy = events.create_proxy();
+    attach_events(&view.webview(), &proxy)?;
     view.load_html(SPLASH)?;
     window.set_visible(true);
+    paths.log("startup screen shown");
 
     let mut app = App {
         view,
@@ -153,6 +160,32 @@ fn run_window(paths: &Paths) -> AppResult<()> {
         attempts: 0,
     };
 
+    let (timer, deadlines) = mpsc::channel::<Option<Instant>>();
+    let wait_thread = thread::Builder::new()
+        .name("connection-timer".into())
+        .spawn(move || {
+            let mut deadline: Option<Instant> = None;
+            loop {
+                deadline = if let Some(at) = deadline {
+                    match deadlines.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                        Ok(next) => next,
+                        Err(RecvTimeoutError::Timeout) => {
+                            if proxy.send_event(AppEvent::Timer).is_err() {
+                                return;
+                            }
+                            None
+                        }
+                        Err(RecvTimeoutError::Disconnected) => return,
+                    }
+                } else {
+                    match deadlines.recv() {
+                        Ok(next) => next,
+                        Err(_) => return,
+                    }
+                };
+            }
+        })?;
+    let mut scheduled = None;
     let exit_code = events.run_return(|event, _, flow| {
         match event {
             Event::WindowEvent {
@@ -163,16 +196,22 @@ fn run_window(paths: &Paths) -> AppResult<()> {
                 return;
             }
             Event::UserEvent(event) => app.handle(event),
-            Event::NewEvents(_) => app.tick(),
             _ => {}
         }
-        *flow = match app.connection {
+        *flow = ControlFlow::Wait;
+        let deadline = match app.connection {
             Connection::Splash { start_at: at }
             | Connection::Loading { deadline: at, .. }
-            | Connection::Offline { retry_at: at } => ControlFlow::WaitUntil(at),
-            Connection::Browsing => ControlFlow::Wait,
+            | Connection::Offline { retry_at: at } => Some(at),
+            Connection::Browsing => None,
         };
+        if scheduled != deadline {
+            let _ = timer.send(deadline);
+            scheduled = deadline;
+        }
     });
+    drop(timer);
+    let _ = wait_thread.join();
 
     if exit_code == 0 {
         Ok(())
@@ -251,6 +290,7 @@ fn attach_events(
 impl App {
     fn handle(&mut self, event: AppEvent) {
         match event {
+            AppEvent::Timer => self.tick(),
             AppEvent::Starting { id, url } => self.navigation_started(id, &url),
             AppEvent::Completed { id, result } => {
                 if matches!(self.connection, Connection::Loading { id: Some(active), .. } if active == id)
@@ -286,6 +326,8 @@ impl App {
 
     fn connect(&mut self) {
         self.attempts += 1;
+        self.paths
+            .log(format!("YouTube connection attempt {}", self.attempts));
         self.connection = Connection::Loading {
             id: None,
             deadline: Instant::now() + LOAD_TIMEOUT,
