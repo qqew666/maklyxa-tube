@@ -148,14 +148,13 @@ fn run_window(paths: &Paths) -> AppResult<()> {
     window.set_visible(true);
     paths.log("startup screen shown");
 
+    let start_at = Instant::now() + STARTUP_DELAY;
     let mut app = App {
         view,
         paths: paths.clone(),
         settings: paths.load_settings(),
         downloads: Downloads::default(),
-        connection: Connection::Splash {
-            start_at: Instant::now() + STARTUP_DELAY,
-        },
+        connection: Connection::Splash { start_at },
         target: Url::parse(YOUTUBE)?,
         attempts: 0,
     };
@@ -185,7 +184,9 @@ fn run_window(paths: &Paths) -> AppResult<()> {
                 };
             }
         })?;
-    let mut scheduled = None;
+    timer.send(Some(start_at))?;
+    let mut scheduled = Some(start_at);
+    window.request_redraw();
     let exit_code = events.run_return(|event, _, flow| {
         match event {
             Event::WindowEvent {

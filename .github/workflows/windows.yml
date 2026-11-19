@@ -14,12 +14,13 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Check formatting
         run: cargo fmt --check
-      - name: Run tests
-        run: cargo test --locked
-      - name: Check Rust warnings
-        run: cargo clippy --locked --all-targets -- -D warnings
       - name: Build MaklyxaTube
         run: cmd /c build.bat
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: MaklyxaTube-Windows-x64
+          path: dist/MaklyxaTube.exe
+          if-no-files-found: error
       - name: Start the Windows client
         shell: pwsh
         run: |
@@ -50,8 +51,7 @@ jobs:
             if ($second -and !$second.HasExited) { Stop-Process -Id $second.Id }
             if (!$first.HasExited) { Stop-Process -Id $first.Id }
           }
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: MaklyxaTube-Windows-x64
-          path: dist/MaklyxaTube.exe
-          if-no-files-found: error
+      - name: Run tests
+        run: cargo test --locked --release
+      - name: Check Rust warnings
+        run: cargo clippy --locked --release --all-targets -- -D warnings
