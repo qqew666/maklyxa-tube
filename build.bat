@@ -1,17 +1,10 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-rmdir /s /q build dist 2>nul
-C:\Python315\python.exe -m PyInstaller --noconfirm --onefile --windowed ^
-  --name MaklyxaTube ^
-  --add-data "%~dp0inject.js;." ^
-  --collect-submodules yt_dlp ^
-  --collect-all webview ^
-  --collect-all imageio_ffmpeg ^
-  --exclude-module tkinter ^
-  --exclude-module _tkinter ^
-  --exclude-module unittest ^
-  --exclude-module pydoc_data ^
-  app.py
+cargo build --locked --release
 if errorlevel 1 exit /b 1
-echo.
+if not exist dist mkdir dist
+if errorlevel 1 exit /b 1
+copy /y target\release\maklyxa-tube.exe dist\MaklyxaTube.exe >nul
+if errorlevel 1 exit /b 1
 echo OK: dist\MaklyxaTube.exe
