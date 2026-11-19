@@ -26,7 +26,6 @@ use crate::{
 
 const SPLASH: &str = include_str!("../assets/splash.html");
 const INJECT: &str = include_str!("../assets/inject.js");
-const STARTUP_DELAY: Duration = Duration::from_millis(400);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(18);
 const RETRY_DELAY: Duration = Duration::from_secs(25);
 const RESTARTED: &str = "MAKLYXA_RESTARTED";
@@ -49,7 +48,6 @@ enum AppEvent {
 }
 
 enum Connection {
-    Splash { start_at: Instant },
     Loading { id: Option<u64>, deadline: Instant },
     Offline { retry_at: Instant },
     Browsing,
@@ -138,23 +136,23 @@ fn run_window(paths: &Paths) -> AppResult<()> {
     window.show();
     paths.log("startup screen shown");
 
-    let start_at = Instant::now() + STARTUP_DELAY;
     let mut app = App {
         view,
         paths: paths.clone(),
         settings: paths.load_settings(),
         downloads: Downloads::default(),
-        connection: Connection::Splash { start_at },
+        connection: Connection::Browsing,
         target: Url::parse(YOUTUBE)?,
         attempts: 0,
     };
 
+    app.connect();
     let mut scheduled = None;
     loop {
         let deadline = match app.connection {
-            Connection::Splash { start_at: at }
-            | Connection::Loading { deadline: at, .. }
-            | Connection::Offline { retry_at: at } => Some(at),
+            Connection::Loading { deadline: at, .. } | Connection::Offline { retry_at: at } => {
+                Some(at)
+            }
             Connection::Browsing => None,
         };
         if scheduled != deadline {
@@ -283,7 +281,6 @@ impl App {
     fn tick(&mut self) {
         let now = Instant::now();
         match self.connection {
-            Connection::Splash { start_at } if now >= start_at => self.connect(),
             Connection::Offline { retry_at } if now >= retry_at => self.connect(),
             Connection::Loading { deadline, .. } if now >= deadline => {
                 let _ = unsafe { self.view.webview().Stop() };
