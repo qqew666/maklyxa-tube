@@ -130,7 +130,7 @@ fn copy_profile(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
+pub fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
     value.as_ref().encode_wide().chain([0]).collect()
 }
 

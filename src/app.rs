@@ -1,20 +1,12 @@
 use std::{
-    env, fs, io,
+    env, fs,
     process::Command,
-    sync::mpsc::{self, RecvTimeoutError},
-    thread,
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
 use serde::Serialize;
 use serde_json::json;
-use tao::{
-    dpi::LogicalSize,
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy},
-    platform::run_return::EventLoopExtRunReturn,
-    window::WindowBuilder,
-};
 use url::Url;
 use webview2_com::{
     Microsoft::Web::WebView2::Win32::{COREWEBVIEW2_WEB_ERROR_STATUS, ICoreWebView2},
@@ -22,12 +14,14 @@ use webview2_com::{
     WebMessageReceivedEventHandler, take_pwstr,
 };
 use windows::core::{BOOL, HSTRING, PWSTR};
+use windows_sys::Win32::{Foundation::HWND, UI::WindowsAndMessaging::PostMessageW};
 use wry::{WebContext, WebView, WebViewBuilder, WebViewBuilderExtWindows, WebViewExtWindows};
 
 use crate::{
     download::Downloads,
     model::{PageMessage, Setting, Settings, YOUTUBE, is_youtube, video_url},
     platform::{APP_NAME, Instance, Paths, activate_existing_window, message_box},
+    window::{APP_EVENT, NativeMessage, Window},
 };
 
 const SPLASH: &str = include_str!("../assets/splash.html");
@@ -40,7 +34,6 @@ const RESTARTED: &str = "MAKLYXA_RESTARTED";
 type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 enum AppEvent {
-    Timer,
     Starting {
         id: u64,
         url: String,
@@ -124,14 +117,7 @@ pub fn run() {
 
 fn run_window(paths: &Paths) -> AppResult<()> {
     fs::create_dir_all(&paths.webview)?;
-    let mut events = EventLoopBuilder::<AppEvent>::with_user_event().build();
-    let window = WindowBuilder::new()
-        .with_title(format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")))
-        .with_inner_size(LogicalSize::new(1380.0, 860.0))
-        .with_min_inner_size(LogicalSize::new(900.0, 560.0))
-        .with_visible(false)
-        .build(&events)?;
-
+    let window = Window::new(&format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")))?;
     paths.log("Windows window created");
     let mut context = WebContext::new(Some(paths.webview.clone()));
     let view = WebViewBuilder::new_with_web_context(&mut context)
@@ -142,10 +128,14 @@ fn run_window(paths: &Paths) -> AppResult<()> {
         .with_initialization_script(INJECT)
         .build(&window)?;
     paths.log("WebView2 created");
-    let proxy = events.create_proxy();
+    let (sender, events) = mpsc::channel();
+    let proxy = EventProxy {
+        window: window.handle(),
+        sender,
+    };
     attach_events(&view.webview(), &proxy)?;
     view.load_html(SPLASH)?;
-    window.set_visible(true);
+    window.show();
     paths.log("startup screen shown");
 
     let start_at = Instant::now() + STARTUP_DELAY;
@@ -159,47 +149,8 @@ fn run_window(paths: &Paths) -> AppResult<()> {
         attempts: 0,
     };
 
-    let (timer, deadlines) = mpsc::channel::<Option<Instant>>();
-    let wait_thread = thread::Builder::new()
-        .name("connection-timer".into())
-        .spawn(move || {
-            let mut deadline: Option<Instant> = None;
-            loop {
-                deadline = if let Some(at) = deadline {
-                    match deadlines.recv_timeout(at.saturating_duration_since(Instant::now())) {
-                        Ok(next) => next,
-                        Err(RecvTimeoutError::Timeout) => {
-                            if proxy.send_event(AppEvent::Timer).is_err() {
-                                return;
-                            }
-                            None
-                        }
-                        Err(RecvTimeoutError::Disconnected) => return,
-                    }
-                } else {
-                    match deadlines.recv() {
-                        Ok(next) => next,
-                        Err(_) => return,
-                    }
-                };
-            }
-        })?;
-    timer.send(Some(start_at))?;
-    let mut scheduled = Some(start_at);
-    window.request_redraw();
-    let exit_code = events.run_return(|event, _, flow| {
-        match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                *flow = ControlFlow::Exit;
-                return;
-            }
-            Event::UserEvent(event) => app.handle(event),
-            _ => {}
-        }
-        *flow = ControlFlow::Wait;
+    let mut scheduled = None;
+    loop {
         let deadline = match app.connection {
             Connection::Splash { start_at: at }
             | Connection::Loading { deadline: at, .. }
@@ -207,24 +158,42 @@ fn run_window(paths: &Paths) -> AppResult<()> {
             Connection::Browsing => None,
         };
         if scheduled != deadline {
-            let _ = timer.send(deadline);
+            window.schedule(deadline)?;
             scheduled = deadline;
         }
-    });
-    drop(timer);
-    let _ = wait_thread.join();
-
-    if exit_code == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!("Цикл WebView2 завершился с кодом {exit_code}")).into())
+        match window.next_message()? {
+            NativeMessage::Events => {
+                for event in events.try_iter() {
+                    app.handle(event);
+                }
+            }
+            NativeMessage::Timer => {
+                // Reschedule if Windows delivered the timer just before the deadline.
+                scheduled = None;
+                window.schedule(None)?;
+                app.tick();
+            }
+            NativeMessage::Other => {}
+            NativeMessage::Quit => return Ok(()),
+        }
     }
 }
 
-fn attach_events(
-    webview: &ICoreWebView2,
-    proxy: &EventLoopProxy<AppEvent>,
-) -> windows::core::Result<()> {
+#[derive(Clone)]
+struct EventProxy {
+    window: HWND,
+    sender: mpsc::Sender<AppEvent>,
+}
+
+impl EventProxy {
+    fn send(&self, event: AppEvent) {
+        if self.sender.send(event).is_ok() {
+            unsafe { PostMessageW(self.window, APP_EVENT, 0, 0) };
+        }
+    }
+}
+
+fn attach_events(webview: &ICoreWebView2, proxy: &EventProxy) -> windows::core::Result<()> {
     let starting = proxy.clone();
     let completed = proxy.clone();
     let messages = proxy.clone();
@@ -237,7 +206,7 @@ fn attach_events(
                     args.NavigationId(&mut id)?;
                     args.Uri(&mut uri)?;
                     let url = take_pwstr(uri);
-                    let _ = starting.send_event(AppEvent::Starting { id, url });
+                    starting.send(AppEvent::Starting { id, url });
                 }
                 Ok(())
             })),
@@ -257,7 +226,7 @@ fn attach_events(
                         args.WebErrorStatus(&mut status)?;
                         Err(status.0)
                     };
-                    let _ = completed.send_event(AppEvent::Completed { id, result });
+                    completed.send(AppEvent::Completed { id, result });
                 }
                 Ok(())
             })),
@@ -277,7 +246,7 @@ fn attach_events(
                         let mut source = PWSTR::null();
                         args.Source(&mut source)?;
                         let source = take_pwstr(source);
-                        let _ = messages.send_event(AppEvent::Message { source, message });
+                        messages.send(AppEvent::Message { source, message });
                     }
                 }
                 Ok(())
@@ -291,7 +260,6 @@ fn attach_events(
 impl App {
     fn handle(&mut self, event: AppEvent) {
         match event {
-            AppEvent::Timer => self.tick(),
             AppEvent::Starting { id, url } => self.navigation_started(id, &url),
             AppEvent::Completed { id, result } => {
                 if matches!(self.connection, Connection::Loading { id: Some(active), .. } if active == id)

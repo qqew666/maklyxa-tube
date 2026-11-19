@@ -11,6 +11,8 @@ mod download;
 mod platform;
 #[cfg(windows)]
 mod tools;
+#[cfg(windows)]
+mod window;
 
 #[cfg(windows)]
 fn main() {

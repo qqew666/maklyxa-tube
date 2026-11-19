@@ -14,11 +14,11 @@ url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 directories = "6"
 sha2 = "0.10"
-tao = { version = "0.37", default-features = false, features = ["rwh_06"] }
+raw-window-handle = "0.6"
 tempfile = "3"
 ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default", "win-system-proxy"] }
 webview2-com = "0.39"
 windows = "0.62"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"] }
 wry = { version = "0.57.3", default-features = false }
 zip = { version = "9.7", default-features = false, features = ["deflate-flate2-zlib-rs"] }
