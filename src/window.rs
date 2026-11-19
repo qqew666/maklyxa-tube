@@ -14,9 +14,10 @@ use windows_sys::Win32::{
         },
         WindowsAndMessaging::{
             CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-            GetMessageW, IDC_ARROW, KillTimer, LoadCursorW, MINMAXINFO, MSG, PostQuitMessage,
-            RegisterClassW, SW_SHOW, SetTimer, ShowWindow, TranslateMessage, WM_APP, WM_CLOSE,
-            WM_GETMINMAXINFO, WM_TIMER, WNDCLASSW, WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW,
+            GetMessageW, IDC_ARROW, KillTimer, LoadCursorW, LoadIconW, MINMAXINFO, MSG,
+            PostQuitMessage, RegisterClassW, SW_SHOW, SetTimer, ShowWindow, TranslateMessage,
+            WM_APP, WM_CLOSE, WM_GETMINMAXINFO, WM_TIMER, WNDCLASSW, WS_CLIPCHILDREN,
+            WS_OVERLAPPEDWINDOW,
         },
     },
 };
@@ -24,6 +25,7 @@ use windows_sys::Win32::{
 use crate::platform::wide;
 
 pub const APP_EVENT: u32 = WM_APP + 1;
+const ICON_RESOURCE: u16 = 1;
 const CONNECTION_TIMER: usize = 1;
 const STYLE: u32 = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
 
@@ -50,6 +52,7 @@ impl Window {
                 lpfnWndProc: Some(window_proc),
                 hInstance: instance,
                 hCursor: LoadCursorW(ptr::null_mut(), IDC_ARROW),
+                hIcon: LoadIconW(instance, ptr::without_provenance(ICON_RESOURCE as usize)),
                 hbrBackground: GetStockObject(BLACK_BRUSH),
                 lpszClassName: class_name.as_ptr(),
                 ..WNDCLASSW::default()

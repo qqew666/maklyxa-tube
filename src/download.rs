@@ -27,7 +27,14 @@ impl Downloads {
         self.0.lock().expect("download state").clone()
     }
 
-    pub fn start(&self, paths: Paths, directory: &Path, url: Url, mode: DownloadMode) -> bool {
+    pub fn start(
+        &self,
+        paths: Paths,
+        directory: &Path,
+        url: Url,
+        mode: DownloadMode,
+        proxy: Option<String>,
+    ) -> bool {
         {
             let mut state = self.0.lock().expect("download state");
             if state.active {
@@ -46,7 +53,14 @@ impl Downloads {
         let spawned = thread::Builder::new()
             .name("video-download".into())
             .spawn(move || {
-                let result = run_download(&worker_paths, &directory, url, mode, &state);
+                let result = run_download(
+                    &worker_paths,
+                    &directory,
+                    url,
+                    mode,
+                    proxy.as_deref(),
+                    &state,
+                );
                 finish(result, &state, &worker_paths);
             });
         if let Err(error) = spawned {
@@ -87,10 +101,11 @@ fn run_download(
     directory: &Path,
     url: Url,
     mode: DownloadMode,
+    proxy: Option<&str>,
     state: &Mutex<DownloadState>,
 ) -> DownloadResult<String> {
     fs::create_dir_all(directory)?;
-    let tools = DownloadTools::prepare(&paths.tools)
+    let tools = DownloadTools::prepare(&paths.tools, proxy)
         .map_err(|error| io::Error::other(format!("Не удалось подготовить загрузчик: {error}")))?;
     let mut home = OsString::from("home:");
     home.push(directory);
@@ -128,6 +143,9 @@ fn run_download(
         .arg(home)
         .args(["--output", "%(title)s.%(ext)s"]);
 
+    if let Some(proxy) = proxy {
+        command.arg("--proxy").arg(proxy);
+    }
     match mode {
         DownloadMode::Mp4 => command.args(["--format", "bv*+ba/b", "--merge-output-format", "mp4"]),
         DownloadMode::Mp3 => command.args([

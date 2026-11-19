@@ -3,6 +3,9 @@
 #[cfg(any(windows, test))]
 mod model;
 
+#[cfg(any(windows, test))]
+mod relay;
+
 #[cfg(windows)]
 mod app;
 #[cfg(windows)]
@@ -11,6 +14,8 @@ mod download;
 mod platform;
 #[cfg(windows)]
 mod tools;
+#[cfg(windows)]
+mod tor;
 #[cfg(windows)]
 mod window;
 

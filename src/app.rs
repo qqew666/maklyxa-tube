@@ -21,12 +21,16 @@ use crate::{
     download::Downloads,
     model::{PageMessage, Setting, Settings, YOUTUBE, is_youtube, video_url},
     platform::{APP_NAME, Instance, Paths, activate_existing_window, message_box},
+    relay::Relay,
+    tor::Readiness,
     window::{APP_EVENT, NativeMessage, Window},
 };
 
 const SPLASH: &str = include_str!("../assets/splash.html");
 const INJECT: &str = include_str!("../assets/inject.js");
 const LOAD_TIMEOUT: Duration = Duration::from_secs(18);
+const PREPARATION_POLL: Duration = Duration::from_millis(350);
+const PLAYBACK_SWITCH_INTERVAL: Duration = Duration::from_secs(60);
 const RETRY_DELAY: Duration = Duration::from_secs(25);
 const RESTARTED: &str = "MAKLYXA_RESTARTED";
 
@@ -49,7 +53,8 @@ enum AppEvent {
 
 enum Connection {
     Loading { id: Option<u64>, deadline: Instant },
-    Offline { retry_at: Instant },
+    Preparing { retry_at: Instant },
+    Offline { retry_at: Option<Instant> },
     Browsing,
 }
 
@@ -61,6 +66,10 @@ struct App {
     connection: Connection,
     target: Url,
     attempts: u32,
+    relay: Option<Relay>,
+    invalid_routes: bool,
+    failed_routes: usize,
+    last_playback_switch: Option<Instant>,
 }
 
 pub fn run() {
@@ -117,12 +126,26 @@ fn run_window(paths: &Paths) -> AppResult<()> {
     fs::create_dir_all(&paths.webview)?;
     let window = Window::new(&format!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")))?;
     paths.log("Windows window created");
+    let (relay, invalid_routes) = match paths
+        .load_routes()
+        .and_then(|routes| Relay::start(&routes, paths.tools.join("tor")))
+    {
+        Ok(relay) => (Some(relay), false),
+        Err(error) => {
+            paths.log(format!("route configuration failed: {error}"));
+            (None, true)
+        }
+    };
+    let mut browser_args = String::from(
+        "--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding",
+    );
+    if let Some(relay) = &relay {
+        browser_args.push_str(&relay.browser_args());
+    }
     let mut context = WebContext::new(Some(paths.webview.clone()));
     let view = WebViewBuilder::new_with_web_context(&mut context)
         .with_background_color((15, 15, 15, 255))
-        .with_additional_browser_args(
-            "--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding",
-        )
+        .with_additional_browser_args(browser_args)
         .with_initialization_script(INJECT)
         .build(&window)?;
     paths.log("WebView2 created");
@@ -144,15 +167,23 @@ fn run_window(paths: &Paths) -> AppResult<()> {
         connection: Connection::Browsing,
         target: Url::parse(YOUTUBE)?,
         attempts: 0,
+        relay,
+        invalid_routes,
+        failed_routes: 0,
+        last_playback_switch: None,
     };
 
-    app.connect();
+    if app.invalid_routes {
+        app.show_offline();
+    } else {
+        app.connect();
+    }
     let mut scheduled = None;
     loop {
         let deadline = match app.connection {
-            Connection::Loading { deadline: at, .. } | Connection::Offline { retry_at: at } => {
-                Some(at)
-            }
+            Connection::Loading { deadline, .. } => Some(deadline),
+            Connection::Preparing { retry_at } => Some(retry_at),
+            Connection::Offline { retry_at } => retry_at,
             Connection::Browsing => None,
         };
         if scheduled != deadline {
@@ -267,9 +298,10 @@ impl App {
                             self.paths.log("YouTube navigation completed");
                             self.connection = Connection::Browsing;
                             self.attempts = 0;
+                            self.failed_routes = 0;
                         }
                         Err(status) => {
-                            self.show_offline(&format!("WebView2 network status {status}"))
+                            self.connection_failed(&format!("WebView2 network status {status}"))
                         }
                     }
                 }
@@ -281,25 +313,58 @@ impl App {
     fn tick(&mut self) {
         let now = Instant::now();
         match self.connection {
-            Connection::Offline { retry_at } if now >= retry_at => self.connect(),
+            Connection::Preparing { retry_at: at } | Connection::Offline { retry_at: Some(at) }
+                if now >= at =>
+            {
+                self.connect()
+            }
             Connection::Loading { deadline, .. } if now >= deadline => {
                 let _ = unsafe { self.view.webview().Stop() };
-                self.show_offline("navigation timed out");
+                self.connection_failed("navigation timed out");
             }
             _ => {}
         }
     }
 
     fn connect(&mut self) {
+        match self
+            .relay
+            .as_ref()
+            .map_or(Readiness::Ready, Relay::readiness)
+        {
+            Readiness::Pending => {
+                if !matches!(self.connection, Connection::Preparing { .. }) {
+                    self.paths.log("Preparing Tor route");
+                    let screen = SPLASH.replace("Загружаю YouTube…", "Подключаю резервный маршрут Tor…")
+                        .replace("При сбое подключения приложение попробует следующий настроенный маршрут.",
+                            "При первом подключении скачивается Tor Expert Bundle. Подключение может занять несколько минут.");
+                    if let Err(error) = self.view.load_html(&screen) {
+                        self.paths.log(format!("Tor status screen failed: {error}"));
+                    }
+                }
+                self.connection = Connection::Preparing {
+                    retry_at: Instant::now() + PREPARATION_POLL,
+                };
+                return;
+            }
+            Readiness::Failed => {
+                self.connection_failed("Tor bootstrap failed");
+                return;
+            }
+            Readiness::Ready => {}
+        }
         self.attempts += 1;
-        self.paths
-            .log(format!("YouTube connection attempt {}", self.attempts));
+        self.paths.log(format!(
+            "YouTube connection attempt {} ({})",
+            self.attempts,
+            self.relay.as_ref().map_or("direct", Relay::country)
+        ));
         self.connection = Connection::Loading {
             id: None,
             deadline: Instant::now() + LOAD_TIMEOUT,
         };
         if let Err(error) = self.view.load_url(self.target.as_str()) {
-            self.show_offline(&error.to_string());
+            self.connection_failed(&error.to_string());
         }
     }
 
@@ -332,11 +397,26 @@ impl App {
         }
     }
 
-    fn show_offline(&mut self, reason: &str) {
+    fn connection_failed(&mut self, reason: &str) {
         self.paths
             .log(format!("YouTube connection failed: {reason}"));
+        if let Some(relay) = &self.relay
+            && !self.downloads.state().active
+        {
+            self.failed_routes += 1;
+            relay.advance();
+            if self.failed_routes < relay.count() {
+                self.connect();
+                return;
+            }
+        }
+        self.failed_routes = 0;
+        self.show_offline();
+    }
+
+    fn show_offline(&mut self) {
         self.connection = Connection::Offline {
-            retry_at: Instant::now() + RETRY_DELAY,
+            retry_at: (!self.invalid_routes).then(|| Instant::now() + RETRY_DELAY),
         };
         let html = SPLASH
             .replace("data-offline=\"false\"", "data-offline=\"true\"")
@@ -348,18 +428,33 @@ impl App {
                 "data-retry=\"0\"",
                 &format!("data-retry=\"{}\"", RETRY_DELAY.as_secs()),
             );
+        let html = if self.invalid_routes {
+            html.replace("data-route-error=\"false\"", "data-route-error=\"true\"")
+        } else {
+            html
+        };
         if let Err(error) = self.view.load_html(&html) {
             self.paths.log(format!("offline page failed: {error}"));
         }
     }
 
     fn handle_message(&mut self, source: &str, message: PageMessage) {
-        if matches!(message, PageMessage::Retry) {
+        if matches!(message, PageMessage::Retry | PageMessage::OpenRoutes) {
             if source == "about:blank"
                 && matches!(self.connection, Connection::Offline { .. })
                 && self.view.url().is_ok_and(|url| url == "about:blank")
             {
-                self.connect();
+                if matches!(message, PageMessage::OpenRoutes) {
+                    if let Err(error) = self.paths.edit_routes() {
+                        self.paths
+                            .log(format!("could not open routes.json: {error}"));
+                        message_box(
+                            "Не удалось открыть routes.json. Папка настроек: %APPDATA%\\MaklyxaTube.",
+                        );
+                    }
+                } else if !self.invalid_routes {
+                    self.connect();
+                }
             }
             return;
         }
@@ -375,6 +470,8 @@ impl App {
                     "type": "ready",
                     "settings": self.settings.page_settings(),
                     "download": self.downloads.state(),
+                    "region": self.relay.as_ref().map(Relay::country),
+                    "canSwitchRegion": self.relay.as_ref().is_some_and(|relay| relay.count() > 1),
                 }));
             }
             PageMessage::SetSetting { key, value } => {
@@ -402,6 +499,7 @@ impl App {
                         &self.settings.download_dir,
                         video,
                         mode,
+                        self.relay.as_ref().map(Relay::proxy_url),
                     )
                 });
                 self.post(&json!({ "type": "download_start", "started": started, "download": self.downloads.state() }));
@@ -409,8 +507,40 @@ impl App {
             PageMessage::DownloadState => {
                 self.post(&json!({ "type": "download", "download": self.downloads.state() }))
             }
-            PageMessage::Retry => {}
+            PageMessage::PlaybackStalled { position } => self.switch_playback_route(url, position),
+            PageMessage::Retry | PageMessage::OpenRoutes => {}
         }
+    }
+
+    fn switch_playback_route(&mut self, mut url: Url, position: u32) {
+        let Some(relay) = self.relay.as_ref().filter(|relay| relay.count() > 1) else {
+            return;
+        };
+        let now = Instant::now();
+        if !matches!(self.connection, Connection::Browsing)
+            || video_url(&url).is_none()
+            || self.downloads.state().active
+            || self
+                .last_playback_switch
+                .is_some_and(|last| now.duration_since(last) < PLAYBACK_SWITCH_INTERVAL)
+        {
+            return;
+        }
+        if position > 0 {
+            let params: Vec<_> = url
+                .query_pairs()
+                .filter(|(key, _)| key != "t")
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect();
+            url.query_pairs_mut()
+                .clear()
+                .extend_pairs(params)
+                .append_pair("t", &position.to_string());
+        }
+        relay.advance();
+        self.target = url;
+        self.last_playback_switch = Some(now);
+        self.connect();
     }
 
     fn post(&self, value: &impl Serialize) {

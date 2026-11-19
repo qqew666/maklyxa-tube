@@ -1,3 +1,4 @@
+use std::process::Command;
 use std::{
     env,
     ffi::{OsStr, c_void},
@@ -20,7 +21,7 @@ use windows_sys::Win32::{
     },
 };
 
-use crate::model::Settings;
+use crate::{model::Settings, relay::Route};
 
 pub const APP_NAME: &str = "MaklyxaTube";
 const MUTEX_NAME: &str = r"Local\MaklyxaTube.SingleInstance";
@@ -28,6 +29,7 @@ const MUTEX_NAME: &str = r"Local\MaklyxaTube.SingleInstance";
 #[derive(Clone)]
 pub struct Paths {
     settings: PathBuf,
+    routes: PathBuf,
     pub log: PathBuf,
     pub webview: PathBuf,
     legacy_webview: PathBuf,
@@ -55,12 +57,48 @@ impl Paths {
             .join(APP_NAME);
         Ok(Self {
             settings: data.join("settings.json"),
+            routes: data.join("routes.json"),
             log: data.join("app.log"),
             legacy_webview: roaming.join("pywebview"),
             webview: local.join("webview"),
             tools: local.join("tools"),
             downloads,
         })
+    }
+
+    pub fn load_routes(&self) -> io::Result<Vec<Route>> {
+        let file = match fs::read(&self.routes) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let routes: Vec<Route> = serde_json::from_slice(&file)
+            .map_err(|_| io::Error::other("routes.json должен содержать массив маршрутов"))?;
+        if routes.len() > 8 || routes.iter().any(|route| !route.valid()) {
+            return Err(io::Error::other(
+                "В routes.json указаны некорректные маршруты",
+            ));
+        }
+        Ok(routes)
+    }
+
+    pub fn edit_routes(&self) -> io::Result<()> {
+        fs::create_dir_all(self.routes.parent().expect("routes directory"))?;
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.routes)
+        {
+            Ok(mut file) => file.write_all(b"[]\r\n")?,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        let system =
+            env::var_os("SystemRoot").ok_or_else(|| io::Error::other("SystemRoot unavailable"))?;
+        Command::new(PathBuf::from(system).join("System32").join("notepad.exe"))
+            .arg(&self.routes)
+            .spawn()?;
+        Ok(())
     }
 
     pub fn load_settings(&self) -> Settings {

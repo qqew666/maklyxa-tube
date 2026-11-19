@@ -83,6 +83,10 @@ pub struct DownloadState {
 pub enum PageMessage {
     Ready,
     Retry,
+    OpenRoutes,
+    PlaybackStalled {
+        position: u32,
+    },
     SetSetting {
         key: Setting,
         value: bool,
@@ -221,6 +225,11 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<PageMessage>(r#"{"type":"download_state"}"#).unwrap(),
             PageMessage::DownloadState
+        ));
+        assert!(matches!(
+            serde_json::from_str::<PageMessage>(r#"{"type":"playback_stalled","position":34}"#)
+                .unwrap(),
+            PageMessage::PlaybackStalled { position: 34 }
         ));
         assert_eq!(DownloadState::default().pct, 0);
     }

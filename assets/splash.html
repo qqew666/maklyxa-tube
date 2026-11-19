@@ -18,22 +18,23 @@
   .c button{margin-top:8px;padding:9px 20px;border-radius:9px;border:1px solid #ff0033;
     background:#ff0033;color:#fff;font:600 13px 'Segoe UI',Roboto,Arial;cursor:pointer}
   .c button:hover{background:#ff3355}
+  .c button.secondary{background:#141414}
+  .c button.secondary:hover{background:#2c1820}
   .st{color:#8a8a8a;font-size:12px}
   body[data-offline="true"] .c{display:flex}
   body[data-offline="true"] :is(.s,.t,.h){display:none}
-</style></head><body data-offline="false" data-attempts="0" data-retry="0">
+</style></head><body data-offline="false" data-attempts="0" data-retry="0" data-route-error="false">
 <div class="b">
   <div class="s" id="spin"></div>
   <div class="t" id="cap">Загружаю YouTube…</div>
-  <div class="h" id="hint">Долго не отвечает? Проверь интернет или VPN. Если YouTube
-    заблокирован на уровне DNS — включи DNS-over-HTTPS или VPN,
-    приложение переподключится само.</div>
+  <div class="h" id="hint">При сбое подключения приложение попробует следующий настроенный маршрут.</div>
   <div class="c" id="card">
     <h1>YouTube не открывается</h1>
     <p>Не удалось подключиться к <b>youtube.com</b>.</p>
-    <p>Чаще всего это блокировка DNS: домен не резолвится. Включи VPN или DNS-over-HTTPS
-      и нажми «Повторить».</p>
+    <p id="route-help">Повтори попытку или добавь свои прокси за пределами России.
+      После изменения маршрутов перезапусти приложение.</p>
     <button id="retry">Повторить</button>
+    <button class="secondary" id="routes">Настроить маршруты</button>
     <div class="st" id="st"></div>
   </div>
 </div>
@@ -42,6 +43,15 @@
   if (document.body.dataset.offline !== "true") return;
   var retry = document.getElementById("retry");
   var status = document.getElementById("st");
+  document.getElementById("routes").addEventListener("click", function () {
+    window.chrome?.webview?.postMessage(JSON.stringify({ type: "open_routes" }));
+  });
+  if (document.body.dataset.routeError === "true") {
+    retry.hidden = true;
+    document.getElementById("route-help").textContent =
+      "Проверь настройки routes.json, сохрани файл и перезапусти приложение.";
+    return;
+  }
   var attempts = document.body.dataset.attempts;
   var deadline = Date.now() + Number(document.body.dataset.retry) * 1000;
   function update() {

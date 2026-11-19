@@ -8,17 +8,17 @@ use std::{
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use ureq::{
-    Agent,
+    Agent, Proxy,
     tls::{RootCerts, TlsConfig, TlsProvider},
 };
 use zip::ZipArchive;
 
-type ToolResult<T> = Result<T, Box<dyn std::error::Error>>;
+pub(crate) type ToolResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-struct Asset {
-    url: &'static str,
-    sha256: &'static str,
-    max_bytes: u64,
+pub(crate) struct Asset {
+    pub(crate) url: &'static str,
+    pub(crate) sha256: &'static str,
+    pub(crate) max_bytes: u64,
 }
 
 const YT_DLP: Asset = Asset {
@@ -44,24 +44,14 @@ pub struct DownloadTools {
 }
 
 impl DownloadTools {
-    pub fn prepare(cache: &Path) -> ToolResult<Self> {
+    pub fn prepare(cache: &Path, proxy: Option<&str>) -> ToolResult<Self> {
         let yt_dlp = cache.join("yt-dlp-2026.10.26").join("yt-dlp.exe");
         let ffmpeg_dir = cache.join("ffmpeg-9.0.2");
         let ffmpeg = ffmpeg_dir.join("ffmpeg.exe");
         let ffprobe = ffmpeg_dir.join("ffprobe.exe");
         let deno = cache.join("deno-2.9.8").join("deno.exe");
 
-        let agent: Agent = Agent::config_builder()
-            .tls_config(
-                TlsConfig::builder()
-                    .provider(TlsProvider::NativeTls)
-                    .root_certs(RootCerts::PlatformVerifier)
-                    .build(),
-            )
-            .timeout_global(Some(Duration::from_secs(900)))
-            .timeout_recv_response(Some(Duration::from_secs(40)))
-            .build()
-            .into();
+        let agent = https_agent(proxy, Duration::from_secs(900))?;
 
         if !yt_dlp.is_file() {
             let parent = yt_dlp.parent().expect("yt-dlp cache directory");
@@ -96,7 +86,25 @@ impl DownloadTools {
     }
 }
 
-fn fetch(agent: &Agent, asset: &Asset, directory: &Path) -> ToolResult<NamedTempFile> {
+pub(crate) fn https_agent(proxy: Option<&str>, budget: Duration) -> ToolResult<Agent> {
+    let mut config = Agent::config_builder();
+    if let Some(proxy) = proxy {
+        config = config.proxy(Some(Proxy::new(proxy)?));
+    }
+    Ok(config
+        .tls_config(
+            TlsConfig::builder()
+                .provider(TlsProvider::NativeTls)
+                .root_certs(RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .timeout_global(Some(budget))
+        .timeout_recv_response(Some(Duration::from_secs(30)))
+        .build()
+        .into())
+}
+
+pub(crate) fn fetch(agent: &Agent, asset: &Asset, directory: &Path) -> ToolResult<NamedTempFile> {
     fs::create_dir_all(directory)?;
     let mut file = NamedTempFile::new_in(directory)?;
     let mut response = agent.get(asset.url).call()?;

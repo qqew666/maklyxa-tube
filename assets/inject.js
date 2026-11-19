@@ -152,6 +152,29 @@
       }
     }, true);
 
+    var routeRegion = null;
+    var canSwitchRegion = false;
+    var stalledPlayback = null;
+    document.addEventListener("waiting", function (event) {
+      var video = event.target;
+      if (!canSwitchRegion || !(video instanceof HTMLVideoElement) ||
+          !videoIdFromUrl() || video.paused || video.seeking || video.closest(".ad-showing")) return;
+      clearTimeout(stalledPlayback);
+      var start = video.currentTime;
+      var href = location.href;
+      stalledPlayback = setTimeout(function () {
+        if (location.href === href && !video.paused && !video.seeking && video.readyState < 3 &&
+            !video.closest(".ad-showing") && Math.abs(video.currentTime - start) < 0.25) {
+          send({ type: "playback_stalled", position: Math.floor(start) });
+        }
+      }, 20000);
+    }, true);
+    for (var eventName of ["playing", "pause", "seeking"]) {
+      document.addEventListener(eventName, function (event) {
+        if (event.target instanceof HTMLVideoElement) clearTimeout(stalledPlayback);
+      }, true);
+    }
+
     // ---------- панель MaklyxaTube ----------
     function mtToast(text) {
       var t = document.createElement("div");
@@ -182,8 +205,11 @@
         row("adblock", "Без рекламы") +
         row("sponsorblock", "Пропуск спонсорских вставок") +
         '<div style="margin-top:10px;border-top:1px solid #333;padding-top:8px;color:#aaa;font-size:12px">' +
+        '<div id="__mt_region"></div>' +
         "Скачанные видео — в папке Видео\\MaklyxaTube</div></div>";
       document.body.appendChild(p);
+      p.querySelector("#__mt_region").textContent =
+        routeRegion ? "Регион подключения: " + routeRegion : "Системное подключение";
       p.querySelectorAll("input").forEach(function (inp) {
         inp.addEventListener("change", function () {
           send({ type: "set_setting", key: inp.dataset.k, value: inp.checked });
@@ -281,6 +307,10 @@
     window.chrome.webview.addEventListener("message", function (event) {
       var message = event.data;
       if (!message || typeof message !== "object") return;
+      if (message.type === "ready") {
+        routeRegion = message.region;
+        canSwitchRegion = message.canSwitchRegion === true;
+      }
       if (message.type === "ready" || message.type === "settings") {
         receivedSettings = true;
         window.__MT_SETTINGS = message.settings;
